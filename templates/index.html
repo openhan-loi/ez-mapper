@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>EzAdmin Smart Mapper</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&family=Noto+Sans+KR:wght@300;400;700&display=swap" rel="stylesheet">
+    <style>
+        :root { --primary: #6366f1; --secondary: #a855f7; --bg: #0f172a; --card: rgba(30, 41, 59, 0.7); --text: #f8fafc; --accent: #10b981; }
+        body { background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%); color: var(--text); font-family: 'Outfit', 'Noto Sans KR', sans-serif; margin: 0; min-height: 100vh; display: flex; flex-direction: column; align-items: center; }
+        .container { width: 90%; max-width: 1000px; margin-top: 50px; padding-bottom: 50px; }
+        h1 { font-size: 2.5rem; text-align: center; background: linear-gradient(to right, #818cf8, #c084fc); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .main-card { background: var(--card); backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,0.1); border-radius: 24px; padding: 40px; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5); }
+        .task-info { background: rgba(99, 102, 241, 0.1); border-left: 4px solid var(--primary); padding: 24px; border-radius: 16px; margin-bottom: 30px; }
+        .keyword-tag { background: rgba(255, 255, 255, 0.08); border: 1px solid rgba(255, 255, 255, 0.15); padding: 6px 14px; border-radius: 30px; font-size: 0.95rem; cursor: pointer; margin-right: 5px; margin-top: 5px; display: inline-block; transition: all 0.2s; }
+        .keyword-tag:hover { background: var(--primary); transform: translateY(-2px); }
+        .search-section { display: flex; gap: 15px; margin-bottom: 20px; }
+        input { flex: 1; background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(255,255,255,0.1); padding: 18px 25px; border-radius: 16px; color: white; font-size: 1.1rem; }
+        button { padding: 12px 28px; border-radius: 16px; border: none; font-weight: 600; cursor: pointer; transition: all 0.3s; }
+        .btn-primary { background: linear-gradient(135deg, var(--primary), var(--secondary)); color: white; }
+        .btn-repeat { background: rgba(168, 85, 247, 0.15); color: #d8b4fe; border: 1px solid rgba(168, 85, 247, 0.25); }
+        .result-item { background: rgba(255,255,255,0.03); padding: 18px 24px; margin-bottom: 12px; border-radius: 16px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; transition: all 0.25s; border: 1px solid transparent; }
+        .result-item:hover { background: rgba(255,255,255,0.07); border-color: var(--primary); transform: translateX(8px); }
+        .res-code { font-family: 'Outfit', monospace; color: #818cf8; font-weight: bold; background: rgba(99, 102, 241, 0.1); padding: 4px 10px; border-radius: 8px; }
+        .progress-bar { width: 100%; height: 8px; background: rgba(255,255,255,0.05); border-radius: 20px; margin-bottom: 25px; overflow: hidden; }
+        .progress-fill { height: 100%; background: linear-gradient(to right, #6366f1, #a855f7); width: 0%; transition: width 0.6s; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>EzAdmin Smart Mapper</h1>
+        <div class="progress-bar"><div id="progress" class="progress-fill"></div></div>
+        <div class="main-card">
+            <div class="task-info">
+                <div id="keyword-box"></div>
+            </div>
+            <div class="search-section">
+                <input type="text" id="searchInput" placeholder="키워드 클릭 또는 입력...">
+                <button class="btn-primary" onclick="search()">검색</button>
+                <button class="btn-repeat" onclick="repeatLast()">직전 값 적용</button>
+            </div>
+            <div id="results"></div>
+        </div>
+    </div>
+    <script>
+        let tasks = []; let lastMappedCode = null; let totalTasks = 0;
+        async function init() { const res = await fetch('/api/get_tasks'); tasks = await res.json(); totalTasks = (totalTasks || tasks.length); updateUI(); }
+        function tokenize(n, o) { const raw = `${n} ${o.replace('/', ' ')}`; return [...new Set(raw.split(/[-_\s,]+/).filter(t => t.length > 0 && t !== 'nan'))]; }
+        function updateUI() {
+            if (tasks.length === 0) { document.getElementById('keyword-box').innerHTML = "🎉 완료!"; return; }
+            const cur = tasks[0]; const tokens = tokenize(cur.name, cur.option);
+            const kb = document.getElementById('keyword-box'); kb.innerHTML = '';
+            tokens.forEach(t => { const s = document.createElement('span'); s.className = 'keyword-tag'; s.innerText = t; s.onclick = () => addK(t); kb.appendChild(s); });
+            const prog = totalTasks > 0 ? ((totalTasks - tasks.length) / totalTasks) * 100 : 100;
+            document.getElementById('progress').style.width = `${prog}%`;
+        }
+        function addK(t) { const i = document.getElementById('searchInput'); i.value = i.value ? i.value + ' ' + t : t; search(); }
+        async function search() {
+            const q = document.getElementById('searchInput').value; if(!q) return;
+            const res = await fetch('/api/search_stock', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({query: q}) });
+            const data = await res.json(); const c = document.getElementById('results'); c.innerHTML = '';
+            data.forEach(item => {
+                const d = document.createElement('div'); d.className = 'result-item';
+                d.innerHTML = `<div><strong>${item.name}</strong><br><small>${item.option}</small></div><div class="res-code">${item.code}</div>`;
+                d.onclick = () => save(item.code); c.appendChild(d);
+            });
+        }
+        async function save(code) {
+            const cur = tasks[0]; await fetch('/api/save_mapping', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({pk_key: cur.pk_key, ez_code: code}) });
+            lastMappedCode = code; tasks.shift(); updateUI(); document.getElementById('results').innerHTML = '';
+        }
+        function repeatLast() { if (lastMappedCode) save(lastMappedCode); else alert("이전 값 없음"); }
+        document.getElementById('searchInput').onkeypress = (e) => { if (e.key === 'Enter') search(); }
+        init();
+    </script>
+</body>
+</html>
