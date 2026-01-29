@@ -1,0 +1,8 @@
+flask
+pandas
+xlrd
+fuzzywuzzy
+python-Levenshtein
+gunicorn
+lxml
+openpyxl
