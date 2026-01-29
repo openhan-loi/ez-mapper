@@ -2,7 +2,6 @@
 from flask import Flask, render_template, request, jsonify
 import pandas as pd
 import os
-import glob
 import re
 import pickle
 
@@ -10,38 +9,21 @@ app = Flask(__name__)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MAPPING_DICT_PATH = os.path.join(BASE_DIR, "mapping_dictionary.xlsx")
-# 변경: 용량이 큰 .xls 대신 압축된 .pkl 파일을 사용
 COMPRESSED_STOCK_PATH = os.path.join(BASE_DIR, "stock_data.pkl")
 MANUAL_LIST_PATH = os.path.join(BASE_DIR, "수동매칭필요_리스트.xlsx")
 
 CACHED_STOCK_DATA = []
 
-def normalize(s):
-    if pd.isna(s): return ""
-    return re.sub(r'[^a-zA-Z0-9가-힣]', '', str(s)).lower()
-
 def load_and_cache_stock():
     global CACHED_STOCK_DATA
     if not os.path.exists(COMPRESSED_STOCK_PATH):
-        print("Compressed stock data not found.")
         return
     try:
         with open(COMPRESSED_STOCK_PATH, 'rb') as f:
-            raw_items = pickle.load(f)
-
-        items = []
-        for row in raw_items:
-            # 미리 정규화된 키를 생성하여 검색 속도 극대화
-            items.append({
-                'name': row['n'],
-                'option': row['o'],
-                'code': row['c'],
-                'search_key': normalize(row['n'] + row['o'])
-            })
-        CACHED_STOCK_DATA = items
-        print(f"Cloud Cache Ready: {len(CACHED_STOCK_DATA)} items.")
+            CACHED_STOCK_DATA = pickle.load(f)
+        print(f"Memory-Optimized Cache Ready: {len(CACHED_STOCK_DATA)} items.")
     except Exception as e:
-        print(f"Cloud Cache error: {e}")
+        print(f"Cache error: {e}")
 
 @app.route('/')
 def index():
@@ -52,12 +34,12 @@ def get_tasks():
     if not os.path.exists(MANUAL_LIST_PATH): return jsonify([])
     try:
         df = pd.read_excel(MANUAL_LIST_PATH)
-        done_keys = set()
+        done_keys = []
         if os.path.exists(MAPPING_DICT_PATH):
-            done_df = pd.read_excel(MAPPING_DICT_PATH)
-            done_keys = set(done_df['pk_key'].tolist())
+            done_keys = pd.read_excel(MAPPING_DICT_PATH)['pk_key'].tolist()
+        done_set = set(done_keys)
         tasks = [{'pk_key': r['pk_key'], 'name': r['상품명'], 'option': r['옵션']}
-                 for _, r in df.iterrows() if r['pk_key'] not in done_keys]
+                 for _, r in df.iterrows() if r['pk_key'] not in done_set]
         return jsonify(tasks)
     except: return jsonify([])
 
@@ -65,9 +47,18 @@ def get_tasks():
 def search_stock():
     query = request.json.get('query', '')
     if not query or not CACHED_STOCK_DATA: return jsonify([])
-    terms = [normalize(t) for t in query.split() if t]
-    results = [item for item in CACHED_STOCK_DATA if all(t in item['search_key'] for t in terms)]
-    return jsonify(results[:50])
+
+    # Pre-tokenize search terms
+    terms = [re.sub(r'[^a-zA-Z0-9가-힣]', '', t).lower() for t in query.split() if t]
+
+    results = []
+    for item in CACHED_STOCK_DATA:
+        # 'k' is the pre-calculated search key
+        if all(t in item['k'] for t in terms):
+            results.append({'name': item['n'], 'option': item['o'], 'code': item['c']})
+            if len(results) >= 30: break
+
+    return jsonify(results)
 
 @app.route('/api/save_mapping', methods=['POST'])
 def save_mapping():
@@ -78,12 +69,14 @@ def save_mapping():
         try:
             current_mappings = pd.read_excel(MAPPING_DICT_PATH).to_dict('records')
         except: pass
+
     found = False
     for m in current_mappings:
         if m['pk_key'] == pk_key:
             m['ez_code'] = ez_code
             found = True; break
     if not found: current_mappings.append({'pk_key': pk_key, 'ez_code': ez_code})
+
     pd.DataFrame(current_mappings).to_excel(MAPPING_DICT_PATH, index=False)
     return jsonify({'status': 'success'})
 
